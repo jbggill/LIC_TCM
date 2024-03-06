@@ -16,7 +16,10 @@ from pytorch_msssim import ms_ssim
 
 from models import TCM
 from torch.utils.tensorboard import SummaryWriter   
-import os
+import os 
+
+import sys
+sys.path.append('/Users/jessegill/Desktop/MLP_CW4')
 
 torch.backends.cudnn.deterministic=True
 torch.backends.cudnn.benchmark=False
@@ -252,7 +255,7 @@ def parse_args(argv):
         "-n",
         "--num-workers",
         type=int,
-        default=20,
+        default=8,
         help="Dataloaders threads (default: %(default)s)",
     )
     parser.add_argument(
@@ -263,7 +266,7 @@ def parse_args(argv):
         help="Bit-rate distortion parameter (default: %(default)s)",
     )
     parser.add_argument(
-        "--batch-size", type=int, default=8, help="Batch size (default: %(default)s)"
+        "--batch-size", type=int, default=2, help="Batch size (default: %(default)s)"
     )
     parser.add_argument(
         "--test-batch-size",
@@ -337,13 +340,13 @@ def main(argv):
         [transforms.CenterCrop(args.patch_size), transforms.ToTensor()]
     )
 
-
+    print(args.dataset)
     train_dataset = ImageFolder(args.dataset, split="train", transform=train_transforms)
     test_dataset = ImageFolder(args.dataset, split="test", transform=test_transforms)
 
     device = "cuda" if args.cuda and torch.cuda.is_available() else "cpu"
     print(device)
-    device = 'cuda'
+    #device = 'mps'
 
     train_dataloader = DataLoader(
         train_dataset,

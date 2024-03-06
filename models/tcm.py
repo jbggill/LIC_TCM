@@ -9,11 +9,13 @@ from compressai.layers import (
     conv3x3,
     subpel_conv3x3,
 )
+from itertools import chain
 
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 import torch
+from torch.nn import Linear
 
 from einops import rearrange 
 from einops.layers.torch import Rearrange
@@ -21,7 +23,10 @@ from einops.layers.torch import Rearrange
 from timm.models.layers import trunc_normal_, DropPath
 import numpy as np
 import math
+import sys
+sys.path.append('/Users/jessegill/Desktop/MLP_CW4/hop_layers/hopfield-layers')
 
+from hflayers import Hopfield  # or import specific classes/functions
 
 SCALES_MIN = 0.11
 SCALES_MAX = 256
@@ -211,6 +216,119 @@ class WMSA(nn.Module):
         relation = cord[:, None, :] - cord[None, :, :] + self.window_size -1
         return self.relative_position_params[:, relation[:,:,0].long(), relation[:,:,1].long()]
 
+
+class EnhancedHopfieldWMSA(nn.Module):
+    def __init__(self, input_dim, output_dim, num_heads, window_size, type):
+        super(EnhancedHopfieldWMSA, self).__init__()
+        self.window_size = window_size
+        self.num_heads = num_heads
+        self.scale = (input_dim * window_size * window_size) ** -0.5
+
+        self.hopfield_layer = Hopfield(input_size=8192,
+                                            output_size=3 * window_size * window_size)
+        self.query_proj = nn.Linear(output_dim, output_dim)
+        self.key_proj = nn.Linear(output_dim, output_dim)
+        self.value_proj = nn.Linear(output_dim, output_dim)
+        self.final_linear = nn.Linear(output_dim, output_dim)
+
+    def forward(self, x):
+        # Assuming x is of shape [batch, channels, height, width]
+        # Step 1: Divide input into windows and process each with the Hopfield layer
+        batch_size, channels, height, width = x.shape
+        x = rearrange(x, 'b c (h w1) (w w2) -> (b h w) (c w1 w2)', w1=self.window_size, w2=self.window_size)
+        x = self.hopfield_layer(x)
+        
+        
+        # Step 2: Apply self-attention within each window
+        # Split the Hopfield layer's output for multi-head attention
+        q = self.query_proj(x)
+        k = self.key_proj(x)
+        v = self.value_proj(x)
+        
+        # Calculate attention scores and apply softmax
+        q = rearrange(q, 'b (n d) -> b n d', n=self.num_heads)
+        k = rearrange(k, 'b (n d) -> b n d', n=self.num_heads)
+        attention_scores = torch.einsum('bnm,bnm->bn', q, k) * self.scale
+        attention = F.softmax(attention_scores, dim=-1)
+        
+        # Apply attention to values
+        v = rearrange(v, 'b (n d) -> b n d', n=self.num_heads)
+        x = torch.einsum('bn,bnd->bnd', attention, v)
+        x = rearrange(x, 'b n d -> b (n d)')
+        
+        # Step 3: Reshape and recombine windows
+        x = rearrange(x, '(b h w) (c w1 w2) -> b c (h w1) (w w2)', b=batch_size, h=height // self.window_size, w=width // self.window_size, w1=self.window_size, w2=self.window_size)
+        x = self.final_linear(x)
+        
+        return x
+    
+class HopfieldBasedWMSA(nn.Module):
+    def __init__(self, input_dim, output_dim, window_size):
+        super(HopfieldBasedWMSA, self).__init__()
+        self.window_size = window_size
+        # Assuming HopfieldLayer is adjusted to work with the specific dimensions
+        self.hopfield_layer = Hopfield(input_size=input_dim)
+        output_projection = Linear(in_features=self.hopfield_layer.output_size * bit_pattern_set.num_instances, out_features=1)
+        
+    def forward(self, x):
+        # Assuming x is of shape [batch, channels, height, width]
+        batch_size, channels, height, width = x.shape
+        # Process input in windows
+        x = rearrange(x, 'b c (h w1) (w w2) -> (b h w) (c w1 w2)', w1=self.window_size, w2=self.window_size)
+        # Apply Hopfield layer to each window
+        x = self.hopfield_layer(x)
+        # Recombine windows
+        x = rearrange(x, '(b h w) (c w1 w2) -> b c (h w1) (w w2)', b=batch_size, h=height // self.window_size, w=width // self.window_size, w1=self.window_size, w2=self.window_size)
+        # Apply a final linear transformation
+        x = self.final_linear(x.view(batch_size, -1))
+        #x = x.view(batch_size, -1, height, width)
+        x = x.view(batch_size, channels*height, width)
+
+        
+        return x
+    
+        
+
+import torch
+import torch.nn as nn
+
+
+class HopLayer(nn.Module):
+    def __init__(self, input_dim, hidden_size, output_dim, channels=3):
+        super(HopLayer, self).__init__()
+        self.input_dim = input_dim
+        self.channels = channels        self.hopfield = Hopfield(input_size=input_dim, hidden_size=hidden_size, output_size= output_dim)
+        self.flatten = nn.Flatten()
+
+
+    def forward(self, x):
+        og_shape = x.shape
+        batch_size = og_shape[0]
+        num_features = x.numel() // batch_size
+        last_dim_size = x.size(-1) 
+        middle_dim_size = num_features // last_dim_size
+        x = x.view(batch_size, middle_dim_size, last_dim_size)
+        
+        x = self.hopfield(x)
+        x = x.reshape(og_shape)
+        # Further processing...
+        return x
+class ControlLayer(nn.Module):
+    def __init__(self, input_dim, hidden_size, output_dim, channels=3):
+        super(ControlLayer, self).__init__()
+        self.input_dim = input_dim
+        self.channels = channels
+        # Assuming Hopfield's input_size now accounts for the flattened image including channels
+        self.hopfield = Hopfield(input_size=input_dim, hidden_size=hidden_size, output_size= output_dim)
+        self.flatten = nn.Flatten()
+
+
+        # Use the dynamically calculated size for the linear layer
+        #self.linear = nn.Linear(flattened_size, output_dim
+
+    def forward(self, x):
+        return x
+
 class Block(nn.Module):
     def __init__(self, input_dim, output_dim, head_dim, window_size, drop_path, type='W', input_resolution=None):
         """ SwinTransformer Block
@@ -221,7 +339,12 @@ class Block(nn.Module):
         assert type in ['W', 'SW']
         self.type = type
         self.ln1 = nn.LayerNorm(input_dim)
-        self.msa = WMSA(input_dim, input_dim, head_dim, window_size, self.type)
+        #self.msa = EnhancedHopfieldWMSA(input_dim, input_dim, head_dim, window_size, self.type)
+       # self.msa = HopLayer(input_dim, 1024,output_dim)
+        #self.msa = WMSA(input_dim, input_dim, head_dim, window_size, self.type)
+        self.msa = ControlLayer(input_dim, 1024,output_dim)
+
+
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.ln2 = nn.LayerNorm(input_dim)
         self.mlp = nn.Sequential(
@@ -307,9 +430,14 @@ class SwinBlock(nn.Module):
             x = F.pad(x, (-padding_col, -padding_col-1, -padding_row, -padding_row-1))
         return trans_x
 
+#class TCM(CompressionModel):
+ #   def __init__(self, config=[2, 2, 2, 2, 2, 2], head_dim=[8, 16, 32, 32, 16, 8], drop_path_rate=0, N=128,  M=320, num_slices=5, max_support_slices=5, **kwargs):
+        #super().__init__(entropy_bottleneck_channels=N)
+        #super(TCM, self).__init__(entropy_bottleneck_channels=N)
 class TCM(CompressionModel):
-    def __init__(self, config=[2, 2, 2, 2, 2, 2], head_dim=[8, 16, 32, 32, 16, 8], drop_path_rate=0, N=128,  M=320, num_slices=5, max_support_slices=5, **kwargs):
-        super().__init__(entropy_bottleneck_channels=N)
+    def __init__(self, config=[2, 2, 2, 2, 2, 2], head_dim=[8, 16, 32, 32, 16, 8], drop_path_rate=0, N=128, M=320, num_slices=5, max_support_slices=5, **kwargs):
+        super(TCM, self).__init__()  # Call the superclass constructor without entropy_bottleneck_channels
+        self.entropy_bottleneck_channels = N
         self.config = config
         self.head_dim = head_dim
         self.window_size = 8
@@ -319,6 +447,7 @@ class TCM(CompressionModel):
         self.M = M
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(config))]
         begin = 0
+        self.hopfield_block = [Hopfield(input_size=N, hidden_size=N//2, output_size=N, batch_first=True)]
 
         self.m_down1 = [ConvTransBlock(dim, dim, self.head_dim[0], self.window_size, dpr[i+begin], 'W' if not i%2 else 'SW') 
                       for i in range(config[0])] + \
@@ -340,8 +469,15 @@ class TCM(CompressionModel):
                       for i in range(config[5])] + \
                       [subpel_conv3x3(2*N, 3, 2)]
         
-        self.g_a = nn.Sequential(*[ResidualBlockWithStride(3, 2*N, 2)] + self.m_down1 + self.m_down2 + self.m_down3)
-        
+
+        self.g_a = nn.Sequential(
+            *chain(
+                [ResidualBlockWithStride(3, 2*N, 2)],
+                self.m_down1,
+                self.m_down2,
+                self.m_down3
+            )
+        )        
 
         self.g_s = nn.Sequential(*[ResidualBlockUpsample(M, 2*N, 2)] + self.m_up1 + self.m_up2 + self.m_up3)
 
@@ -425,6 +561,7 @@ class TCM(CompressionModel):
     
     def forward(self, x):
         y = self.g_a(x)
+        print('g_a ran')
         y_shape = y.shape[2:]
         z = self.h_a(y)
         _, z_likelihoods = self.entropy_bottleneck(z)
