@@ -255,7 +255,7 @@ def parse_args(argv):
         "-n",
         "--num-workers",
         type=int,
-        default=8,
+        default=4,
         help="Dataloaders threads (default: %(default)s)",
     )
     parser.add_argument(

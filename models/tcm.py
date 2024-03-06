@@ -289,15 +289,14 @@ class HopfieldBasedWMSA(nn.Module):
     
         
 
-import torch
-import torch.nn as nn
 
 
 class HopLayer(nn.Module):
     def __init__(self, input_dim, hidden_size, output_dim, channels=3):
         super(HopLayer, self).__init__()
         self.input_dim = input_dim
-        self.channels = channels        self.hopfield = Hopfield(input_size=input_dim, hidden_size=hidden_size, output_size= output_dim)
+        self.channels = channels        
+        self.hopfield = Hopfield(input_size=input_dim, hidden_size=hidden_size, output_size= output_dim)
         self.flatten = nn.Flatten()
 
 
@@ -311,20 +310,16 @@ class HopLayer(nn.Module):
         
         x = self.hopfield(x)
         x = x.reshape(og_shape)
-        # Further processing...
         return x
+    
 class ControlLayer(nn.Module):
     def __init__(self, input_dim, hidden_size, output_dim, channels=3):
         super(ControlLayer, self).__init__()
         self.input_dim = input_dim
         self.channels = channels
-        # Assuming Hopfield's input_size now accounts for the flattened image including channels
         self.hopfield = Hopfield(input_size=input_dim, hidden_size=hidden_size, output_size= output_dim)
         self.flatten = nn.Flatten()
 
-
-        # Use the dynamically calculated size for the linear layer
-        #self.linear = nn.Linear(flattened_size, output_dim
 
     def forward(self, x):
         return x
