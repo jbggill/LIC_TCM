@@ -26,7 +26,7 @@ import math
 import sys
 sys.path.append('/Users/jessegill/Desktop/MLP_CW4/hop_layers/hopfield-layers')
 
-from hflayers import Hopfield  # or import specific classes/functions
+from hflayers import Hopfield, HopfieldPooling,  HopfieldLayer
 
 SCALES_MIN = 0.11
 SCALES_MAX = 256
@@ -217,86 +217,33 @@ class WMSA(nn.Module):
         return self.relative_position_params[:, relation[:,:,0].long(), relation[:,:,1].long()]
 
 
-class EnhancedHopfieldWMSA(nn.Module):
-    def __init__(self, input_dim, output_dim, num_heads, window_size, type):
-        super(EnhancedHopfieldWMSA, self).__init__()
-        self.window_size = window_size
-        self.num_heads = num_heads
-        self.scale = (input_dim * window_size * window_size) ** -0.5
-
-        self.hopfield_layer = Hopfield(input_size=8192,
-                                            output_size=3 * window_size * window_size)
-        self.query_proj = nn.Linear(output_dim, output_dim)
-        self.key_proj = nn.Linear(output_dim, output_dim)
-        self.value_proj = nn.Linear(output_dim, output_dim)
-        self.final_linear = nn.Linear(output_dim, output_dim)
-
-    def forward(self, x):
-        # Assuming x is of shape [batch, channels, height, width]
-        # Step 1: Divide input into windows and process each with the Hopfield layer
-        batch_size, channels, height, width = x.shape
-        x = rearrange(x, 'b c (h w1) (w w2) -> (b h w) (c w1 w2)', w1=self.window_size, w2=self.window_size)
-        x = self.hopfield_layer(x)
-        
-        
-        # Step 2: Apply self-attention within each window
-        # Split the Hopfield layer's output for multi-head attention
-        q = self.query_proj(x)
-        k = self.key_proj(x)
-        v = self.value_proj(x)
-        
-        # Calculate attention scores and apply softmax
-        q = rearrange(q, 'b (n d) -> b n d', n=self.num_heads)
-        k = rearrange(k, 'b (n d) -> b n d', n=self.num_heads)
-        attention_scores = torch.einsum('bnm,bnm->bn', q, k) * self.scale
-        attention = F.softmax(attention_scores, dim=-1)
-        
-        # Apply attention to values
-        v = rearrange(v, 'b (n d) -> b n d', n=self.num_heads)
-        x = torch.einsum('bn,bnd->bnd', attention, v)
-        x = rearrange(x, 'b n d -> b (n d)')
-        
-        # Step 3: Reshape and recombine windows
-        x = rearrange(x, '(b h w) (c w1 w2) -> b c (h w1) (w w2)', b=batch_size, h=height // self.window_size, w=width // self.window_size, w1=self.window_size, w2=self.window_size)
-        x = self.final_linear(x)
-        
-        return x
-    
-class HopfieldBasedWMSA(nn.Module):
-    def __init__(self, input_dim, output_dim, window_size):
-        super(HopfieldBasedWMSA, self).__init__()
-        self.window_size = window_size
-        # Assuming HopfieldLayer is adjusted to work with the specific dimensions
-        self.hopfield_layer = Hopfield(input_size=input_dim)
-        output_projection = Linear(in_features=self.hopfield_layer.output_size * bit_pattern_set.num_instances, out_features=1)
-        
-    def forward(self, x):
-        # Assuming x is of shape [batch, channels, height, width]
-        batch_size, channels, height, width = x.shape
-        # Process input in windows
-        x = rearrange(x, 'b c (h w1) (w w2) -> (b h w) (c w1 w2)', w1=self.window_size, w2=self.window_size)
-        # Apply Hopfield layer to each window
-        x = self.hopfield_layer(x)
-        # Recombine windows
-        x = rearrange(x, '(b h w) (c w1 w2) -> b c (h w1) (w w2)', b=batch_size, h=height // self.window_size, w=width // self.window_size, w1=self.window_size, w2=self.window_size)
-        # Apply a final linear transformation
-        x = self.final_linear(x.view(batch_size, -1))
-        #x = x.view(batch_size, -1, height, width)
-        x = x.view(batch_size, channels*height, width)
-
-        
-        return x
-    
-        
-
-
-
 class HopLayer(nn.Module):
     def __init__(self, input_dim, hidden_size, output_dim, channels=3):
         super(HopLayer, self).__init__()
         self.input_dim = input_dim
         self.channels = channels        
         self.hopfield = Hopfield(input_size=input_dim, hidden_size=hidden_size, output_size= output_dim)
+        self.flatten = nn.Flatten()
+
+
+    def forward(self, x):
+        og_shape = x.shape
+        batch_size = og_shape[0]
+        num_features = x.numel() // batch_size
+        last_dim_size = x.size(-1) 
+        middle_dim_size = num_features // last_dim_size
+        x = x.view(batch_size, middle_dim_size, last_dim_size)
+        
+        x = self.hopfield(x)
+        x = x.reshape(og_shape)
+        return x
+    
+class HopLayerLayer(nn.Module):
+    def __init__(self, input_dim, hidden_size, output_dim, channels=3):
+        super(HopLayerLayer, self).__init__()
+        self.input_dim = input_dim
+        self.channels = channels        
+        self.hopfield = HopfieldLayer(input_size=input_dim, hidden_size=hidden_size, output_size= output_dim)
         self.flatten = nn.Flatten()
 
 
@@ -335,9 +282,10 @@ class Block(nn.Module):
         self.type = type
         self.ln1 = nn.LayerNorm(input_dim)
         #self.msa = EnhancedHopfieldWMSA(input_dim, input_dim, head_dim, window_size, self.type)
-       # self.msa = HopLayer(input_dim, 1024,output_dim)
+        #self.msa = HopLayer(input_dim, 1024,output_dim)
         #self.msa = WMSA(input_dim, input_dim, head_dim, window_size, self.type)
-        self.msa = ControlLayer(input_dim, 1024,output_dim)
+        #self.msa = ControlLayer(input_dim, 1024,output_dim)
+        self.msa = HopLayerLayer(input_dim, 1024,output_dim)
 
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()

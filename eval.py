@@ -51,6 +51,25 @@ def crop(x, padding):
         x,
         (-padding[0], -padding[1], -padding[2], -padding[3]),
     )
+def image_to_tensor(image_path, target_size=(256, 256)):
+    """
+    Converts an image to a tensor and resizes it to the target size.
+
+    Parameters:
+    - image_path: Path to the image file.
+    - target_size: A tuple (width, height) representing the desired output size.
+
+    Returns:
+    - A torch tensor representing the resized image.
+    """
+    image = Image.open(image_path).convert("RGB")
+    resize_transform = transforms.Compose([
+        transforms.Resize(target_size),
+        transforms.ToTensor(),
+    ])
+    image_tensor = resize_transform(image)
+    return image_tensor
+
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(description="Example testing script.")
@@ -102,7 +121,9 @@ def main(argv):
         net.update()
         for img_name in img_list:
             img_path = os.path.join(path, img_name)
-            img = transforms.ToTensor()(Image.open(img_path).convert('RGB')).to(device)
+            #img = transforms.ToTensor()(Image.open(img_path).convert('RGB')).to(device)
+            img = image_to_tensor(img_path)
+            print(img.shape)
             x = img.unsqueeze(0)
             x_padded, padding = pad(x, p)
             count += 1
@@ -129,7 +150,12 @@ def main(argv):
         for img_name in img_list:
             img_path = os.path.join(path, img_name)
             img = Image.open(img_path).convert('RGB')
-            x = transforms.ToTensor()(img).unsqueeze(0).to(device)
+            #img = transforms.ToTensor()(Image.open(img_path).convert('RGB')).to(device)
+            x = image_to_tensor(img_path).unsqueeze(0)
+            print(x.shape)
+            #x = transforms.ToTensor()(img).unsqueeze(0).to(device)
+
+
             x_padded, padding = pad(x, p)
             count += 1
             with torch.no_grad():
